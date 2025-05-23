@@ -9,36 +9,51 @@ appSecret = os.environ.get("APP_SECRET")
 openIdss = os.environ.get("OPEN_ID_S")
 weather_template_id = os.environ.get("TEMPLATE_ID")
 news_template_id = os.environ.get("NEWS_TEMPLATE_ID")
-
+deep_seek_api = os.environ.get("DEEP_SEEK_API")
 def get_baidu_news_top10():
-    # 构造请求头
+    url = 'https://top.baidu.com/board?tab=realtime'
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'
     }
-    url = 'https://news.baidu.com/'
     response = requests.get(url, headers=headers)
 
-    # 检查响应状态
+    # 判断请求是否成功
     if response.status_code == 200:
-        html_content = response.content
+        # 解析网页内容
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        # 查找热搜列表
+        hot_list = soup.find_all('div', class_='c-single-text-ellipsis')
+        print(hot_list)
+        news_list = []
+        # 输出前10条热搜
+        for i in range(10):
+            if i < len(hot_list):
+                print(f"{i + 1}. {hot_list[i].text.strip()}")
+                news_list.append({'title': hot_list[i].text.strip()})
+
+            else:
+                print("热搜条目不足10条")
+                break
     else:
-        print(f"Failed to retrieve data, status code: {response.status_code}")
-        return []
-
-    # 使用BeautifulSoup解析HTML
-    soup = BeautifulSoup(html_content, 'html.parser')
-
-    # 提取新闻信息
-    news_list = []
-    hotnews = soup.find('div', class_='hotnews')
-    if hotnews:
-        news_items = hotnews.find_all('a')
-        for item in news_items[:10]:  # 获取前10条新闻
-            title = item.get_text()
-            link = item['href']
-            news_list.append({'title': title, 'link': link})
-
+        print(f"请求失败，状态码：{response.status_code}")
     return news_list
+
+
+def parse_html(self, html_content):
+    soup = BeautifulSoup(html_content, 'html.parser')
+    hot_searches = []
+    for item in soup.find_all('div', class_=self.all_content_class):
+        title = self.title_pattern.search(str(item))
+        introduction = self.introduction_pattern.search(str(item))
+        index = self.index_pattern.search(str(item))
+        if title and introduction and index:
+            hot_searches.append({
+                'title': title.group(1),
+                'introduction': introduction.group(1),
+                'index': index.group(1)
+            })
+    return hot_searches
 
 def get_access_token():
     # 获取access token的url
@@ -62,8 +77,12 @@ def send_news(access_token, top10_news,openId):
 
     # 格式化为“年月日时分秒”的格式
     now_str = now.strftime("%Y年%m月%d日 %H时%M分%S秒")
+    ii = 1
     for news in top10_news:
-        i=0
+        segmentss =split_text(get_news_summary(news.get("title")))
+        print(segmentss)
+        while len(segmentss) < 5:
+            segmentss.append("")
         body = {
             "touser": openId.strip(),
             "template_id": news_template_id.strip(),
@@ -73,19 +92,66 @@ def send_news(access_token, top10_news,openId):
                     "value": now_str
                 },
                 "top": {
-                    "value": i+1
+                    "value": ii
                 },
                 "title": {
-                    "value": news.title
+                    "value": news.get("title")
                 },
-                "link": {
-                    "value": news.link
+                "content1": {
+                    "value": segmentss[0]
+                },
+                "content2": {
+                    "value": segmentss[1]
+                },
+                "content3": {
+                    "value": segmentss[2]
+                },
+                "content4": {
+                    "value": segmentss[3]
+                },
+                "content5": {
+                    "value": segmentss[4]
                 }
             }
         }
-        i=i
+        ii=ii+1
         url = 'https://api.weixin.qq.com/cgi-bin/message/template/send?access_token={}'.format(access_token)
         print(requests.post(url, json.dumps(body)).text)
+
+
+def get_news_summary(news_link):
+    url = "https://api.deepseek.com/v1/chat/completions"
+    headers = {
+        "Authorization": "Bearer "+deep_seek_api,
+        "Content-Type": "application/json"
+    }
+    data = {
+        "model": "deepseek-chat",
+        "messages": [{"role": "user", "content": "针对这个标题【"+news_link+"】搜索相关的新闻，按照犀利的语言简述内容，完整的一句话，不需要分割，字数要求50字左右，"}]
+    }
+    response = requests.post(url, headers=headers, json=data)
+    return response.json()['choices'][0]['message']['content']
+
+
+def split_text(text, max_length=19):
+    """
+    将文本分割成每段不超过指定长度的数组。
+    :param text: 要分割的文本
+    :param max_length: 每段的最大长度
+    :return: 分割后的文本数组
+    """
+    if len(text) <= max_length:
+        return [text]
+
+    segments = []
+    start = 0
+    while start < len(text):
+        end = start + max_length
+        segment = text[start:end]
+        segments.append(segment)
+        start = end
+
+    return segments
 
 
 def top10_news():
